@@ -1,11 +1,10 @@
 // README stats section, same layout as waka-readme-stats text mode (GitHub data only).
 import { PAGE } from './github.mjs';
 
-const BATCH = 50;
 const POOL = 4;
 const REPO_FIELDS = 'nameWithOwner isFork primaryLanguage { name }';
 
-export async function statsSection({ raw, gql, paginate }, login, timeZone, log) {
+export async function statsSection({ gql, paginate }, login, timeZone, log) {
   const user = (await gql('query($login:String!){ user(login:$login) { id } }', { login })).user;
   const year = new Date().getUTCFullYear();
 
@@ -34,97 +33,29 @@ export async function statsSection({ raw, gql, paginate }, login, timeZone, log)
   );
   const repos = new Map();
   for (const r of [...mine, ...contributed]) if (r && !r.isFork && !repos.has(r.nameWithOwner)) repos.set(r.nameWithOwner, r);
-  const commits = await commitDates({ raw, gql }, user.id, [...repos.keys()], log);
+  const commits = await commitDates(gql, user.id, [...repos.keys()], log);
   return render({ commits, repos, diskKB, publicRepos, privateRepos, contrib, year, timeZone, log });
 }
 
-// Commits by the user on all branches, deduped by oid: oid -> committedDate.
-// Default branch: author-filtered history. Other branches: commits ahead of default.
-export async function commitDates({ raw, gql }, userId, names, log) {
+// Commits by the user on each default branch: oid -> committedDate
+async function commitDates(gql, userId, names, log) {
   const commits = new Map();
-  const add = (nodes) => { for (const c of nodes) commits.set(c.oid, c.committedDate); };
-  const byUser = (nodes) => nodes.filter((c) => c.author?.user?.id === userId);
-  const COMMIT = 'oid committedDate author { user { id } }';
-
-  async function history(owner, name, branch) {
-    let after = null;
-    do {
-      const d = await gql(
-        `query($owner:String!,$name:String!,$q:String!,$id:ID!,$after:String){ repository(owner:$owner,name:$name){ ref(qualifiedName:$q){ target { ... on Commit { history(first:100, after:$after, author:{id:$id}) { nodes { oid committedDate } ${PAGE} } } } } } }`,
-        { owner, name, q: `refs/heads/${branch}`, id: userId, after },
-      );
-      const h = d.repository.ref?.target?.history;
-      if (!h) return;
-      add(h.nodes);
-      after = h.pageInfo.hasNextPage ? h.pageInfo.endCursor : null;
-    } while (after);
-  }
-
-  async function ahead(owner, name, base, branch, cmp) {
-    let { nodes, pageInfo } = cmp.commits;
-    let seen = nodes.length;
-    add(byUser(nodes));
-    while (pageInfo.hasNextPage) {
-      const d = await gql(
-        `query($owner:String!,$name:String!,$base:String!,$head:String!,$after:String){ repository(owner:$owner,name:$name){ ref(qualifiedName:$base){ compare(headRef:$head) { commits(first:100, after:$after) { nodes { ${COMMIT} } ${PAGE} } } } } }`,
-        { owner, name, base: `refs/heads/${base}`, head: `refs/heads/${branch}`, after: pageInfo.endCursor },
-      );
-      ({ nodes, pageInfo } = d.repository.ref.compare.commits);
-      seen += nodes.length;
-      add(byUser(nodes));
-    }
-    if (seen < cmp.aheadBy) await history(owner, name, branch);
-  }
-
-  async function compareBatch(owner, name, base, branches) {
-    const defs = branches.map((_, i) => `$h${i}:String!`).join(',');
-    const body = branches.map((_, i) => `c${i}: compare(headRef:$h${i}) { aheadBy commits(first:100) { nodes { ${COMMIT} } ${PAGE} } }`).join(' ');
-    const vars = { owner, name, base: `refs/heads/${base}` };
-    branches.forEach((b, i) => { vars[`h${i}`] = `refs/heads/${b}`; });
-    let res;
-    try {
-      res = await raw(`query($owner:String!,$name:String!,$base:String!,${defs}){ repository(owner:$owner,name:$name){ ref(qualifiedName:$base){ ${body} } } }`, vars, 2);
-    } catch (e) {
-      if (branches.length > 1) {
-        const mid = Math.ceil(branches.length / 2);
-        await compareBatch(owner, name, base, branches.slice(0, mid));
-        return compareBatch(owner, name, base, branches.slice(mid));
-      }
-      res = { data: null };
-    }
-    for (let i = 0; i < branches.length; i++) {
-      const cmp = res.data?.repository?.ref?.[`c${i}`];
-      try {
-        // No merge base or failed compare: scan the branch history
-        if (cmp) await ahead(owner, name, base, branches[i], cmp);
-        else await history(owner, name, branches[i]);
-      } catch (e) { log(`skip ${owner}/${name}@${branches[i]}: ${e.message.slice(0, 120)}`); }
-    }
-  }
-
   let done = 0;
   async function scanRepo(full) {
     const [owner, name] = full.split('/');
     try {
-      let def = null;
-      const refs = [];
       let after = null;
       do {
         const d = await gql(
-          `query($owner:String!,$name:String!,$after:String){ repository(owner:$owner,name:$name){ defaultBranchRef { name target { oid } } refs(refPrefix:"refs/heads/", first:100, after:$after) { nodes { name target { oid } } ${PAGE} } } }`,
-          { owner, name, after },
+          `query($owner:String!,$name:String!,$id:ID!,$after:String){ repository(owner:$owner,name:$name){ defaultBranchRef { target { ... on Commit { history(first:100, after:$after, author:{id:$id}) { nodes { oid committedDate } ${PAGE} } } } } } }`,
+          { owner, name, id: userId, after },
         );
-        def = d.repository.defaultBranchRef;
-        refs.push(...d.repository.refs.nodes);
-        after = d.repository.refs.pageInfo.hasNextPage ? d.repository.refs.pageInfo.endCursor : null;
+        const h = d.repository.defaultBranchRef?.target?.history;
+        if (!h) break;
+        for (const c of h.nodes) commits.set(c.oid, c.committedDate);
+        after = h.pageInfo.hasNextPage ? h.pageInfo.endCursor : null;
       } while (after);
-      if (!def) return;
-      await history(owner, name, def.name);
-      // Branches with the same tip have the same commits
-      const seen = new Set([def.target.oid]);
-      const branches = refs.filter((r) => !seen.has(r.target.oid) && seen.add(r.target.oid)).map((r) => r.name);
-      for (let i = 0; i < branches.length; i += BATCH) await compareBatch(owner, name, def.name, branches.slice(i, i + BATCH));
-      log(`${++done}/${names.length} ${full} (${branches.length + 1} branches) commits: ${commits.size}`);
+      log(`${++done}/${names.length} ${full} commits: ${commits.size}`);
     } catch (e) { log(`skip ${full}: ${e.message.slice(0, 160)}`); }
   }
 
