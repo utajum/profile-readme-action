@@ -1,0 +1,24 @@
+name: Test
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: utajum/utajum
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .action
+      - uses: ./.action
+      - run: |
+          git status --short
+          test -s profile-3d-contrib/profile-night-rainbow.svg
+          test -s profile/activity-graph.svg

@@ -1,0 +1,15 @@
+name: Profile README
+description: Update README stats, 3D contribution calendar and activity graph of a profile repo.
+author: utajum
+
+inputs:
+  token:
+    description: Token for GitHub data. A PAT with repo scope adds private stats. With GITHUB_TOKEN the README stats are skipped.
+    default: ${{ github.token }}
+  timezone:
+    description: IANA time zone for commit times in the README stats.
+    default: UTC
+
+runs:
+  using: node24
+  main: index.mjs
