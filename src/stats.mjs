@@ -2,7 +2,7 @@
 import { PAGE } from './github.mjs';
 
 const POOL = 4;
-const REPO_FIELDS = 'nameWithOwner isFork primaryLanguage { name }';
+const REPO_FIELDS = 'nameWithOwner isFork isPrivate primaryLanguage { name }';
 
 export async function statsSection({ gql, paginate }, login, timeZone, log) {
   const user = (await gql('query($login:String!){ user(login:$login) { id } }', { login })).user;
@@ -33,16 +33,15 @@ export async function statsSection({ gql, paginate }, login, timeZone, log) {
   );
   const repos = new Map();
   for (const r of [...mine, ...contributed]) if (r && !r.isFork && !repos.has(r.nameWithOwner)) repos.set(r.nameWithOwner, r);
-  const commits = await commitDates(gql, user.id, [...repos.keys()], log);
+  const commits = await commitDates(gql, user.id, [...repos.values()], log);
   return render({ commits, repos, diskKB, publicRepos, privateRepos, contrib, year, timeZone, log });
 }
 
 // Commits by the user on each default branch: oid -> committedDate
-async function commitDates(gql, userId, names, log) {
+async function commitDates(gql, userId, repos, log) {
   const commits = new Map();
-  let done = 0;
-  async function scanRepo(full) {
-    const [owner, name] = full.split('/');
+  async function scanRepo(repo) {
+    const [owner, name] = repo.nameWithOwner.split('/');
     try {
       let after = null;
       do {
@@ -55,11 +54,13 @@ async function commitDates(gql, userId, names, log) {
         for (const c of h.nodes) commits.set(c.oid, c.committedDate);
         after = h.pageInfo.hasNextPage ? h.pageInfo.endCursor : null;
       } while (after);
-      log(`${++done}/${names.length} ${full} commits: ${commits.size}`);
-    } catch (e) { log(`skip ${full}: ${e.message.slice(0, 160)}`); }
+    } catch (e) {
+      // Logs are public: hide private repo names
+      log(repo.isPrivate ? 'skip [private]' : `skip ${repo.nameWithOwner}: ${e.message.slice(0, 160)}`);
+    }
   }
 
-  const queue = [...names];
+  const queue = [...repos];
   await Promise.all(Array.from({ length: POOL }, async () => { while (queue.length) await scanRepo(queue.shift()); }));
   return commits;
 }
