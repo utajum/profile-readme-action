@@ -86,7 +86,7 @@ function render({ commits, repos, diskKB, publicRepos, privateRepos, contrib, ye
     withLang++;
     langs.set(r.primaryLanguage.name, (langs.get(r.primaryLanguage.name) || 0) + 1);
   }
-  const topLangs = [...langs].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const topLangs = [...langs].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 
   const len = (s) => [...s].length;
   const pct = (n, total) => (total ? Math.round((n / total) * 10000) / 100 : 0);

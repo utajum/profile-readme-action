@@ -4,7 +4,7 @@ One action for the [utajum/utajum](https://github.com/utajum/utajum) profile REA
 
 It writes three files in the workspace:
 
-- `README.md`: the `<!--START_SECTION:waka-->` section (storage, contributions, repo counts, commit times, weekdays, top languages).
+- `README.md`: the `<!--START_SECTION:waka-->` section (storage, contributions, repo counts, commit times, weekdays, all languages).
 - `profile-3d-contrib/profile-night-rainbow.svg`: 3D contribution calendar, night-rainbow theme.
 - `profile/activity-graph.svg`: 31-day contribution graph.
 
